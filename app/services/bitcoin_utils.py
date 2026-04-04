@@ -15,30 +15,45 @@ def create_escrow_script(buyer_pub: str, seller_pub: str, arbiter_pub: str, time
     seller = bytes.fromhex(seller_pub)
     arbiter = bytes.fromhex(arbiter_pub)
     
-    # We create the script using embit's list of opcodes and data pushes
-    s = script.Script([
-        script.OP_IF,
-        script.OP_2,
-        buyer,
-        seller,
-        arbiter,
-        script.OP_3,
-        script.OP_CHECKMULTISIG,
-        script.OP_ELSE,
-        timelock, # This will be pushed as a scriptnum by embit automatically
-        script.OP_CHECKLOCKTIMEVERIFY,
-        script.OP_DROP,
-        buyer,
-        script.OP_CHECKSIG,
-        script.OP_ENDIF
-    ])
-    return s
+    # Build raw script bytes manually for maximum compatibility
+    data = b"\x63" # OP_IF
+    data += b"\x52" # OP_2
+    data += b"\x21" + buyer
+    data += b"\x21" + seller
+    data += b"\x21" + arbiter
+    data += b"\x53" # OP_3
+    data += b"\xae" # OP_CHECKMULTISIG
+    data += b"\x67" # OP_ELSE
+    
+    # Push timelock - handling as a script number
+    # For small numbers under 16, we can use OP_1..OP_16 (0x51..0x60)
+    # For simplicity and support for larger numbers, we push as minimal data
+    from embit.compact import to_bytes
+    if timelock <= 16:
+        data += bytes([0x50 + timelock])
+    else:
+        # Pushing a script number (CScriptNum style)
+        # Note: simplistic implementation for timelock pushes
+        t_bytes = timelock.to_bytes((timelock.bit_length() + 8) // 8, 'little')
+        data += bytes([len(t_bytes)]) + t_bytes
+
+    data += b"\xb1" # OP_CHECKLOCKTIMEVERIFY
+    data += b"\x75" # OP_DROP
+    data += b"\x21" + buyer
+    data += b"\xac" # OP_CHECKSIG
+    data += b"\x68" # OP_ENDIF
+    
+    return script.Script(data)
 
 def get_p2wsh_address(redeem_script: script.Script) -> str:
     """
     Takes a redeem script and returns its P2WSH address for the configured network.
     """
-    network = networks.NETWORKS[settings.bitcoin_network]
+    net_name = settings.bitcoin_network
+    if net_name == "testnet":
+        net_name = "test"
+    
+    network = networks.NETWORKS[net_name]
     return script.p2wsh(redeem_script).address(network)
 
 def combine_psbts(psbt_list: list) -> str:
@@ -58,4 +73,43 @@ def combine_psbts(psbt_list: list) -> str:
         for i, inp in enumerate(combined.inputs):
             inp.partial_sigs.update(p_obj.inputs[i].partial_sigs)
     
-    return combined.to_base64()
+import httpx
+
+def get_address_balance(address: str) -> dict:
+    """
+    Connects to mempool.space API to check UTXOs and total balance for the address.
+    """
+    url = f"{settings.mempool_api_url}/address/{address}"
+    try:
+        response = httpx.get(url)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Get balance: confirmed + unconfirmed
+        chain_stats = data.get("chain_stats", {})
+        mempool_stats = data.get("mempool_stats", {})
+        
+        confirmed = chain_stats.get("funded_txo_sum", 0) - chain_stats.get("spent_txo_sum", 0)
+        unconfirmed = mempool_stats.get("funded_txo_sum", 0) - mempool_stats.get("spent_txo_sum", 0)
+        
+        return {
+            "address": address,
+            "confirmed_sats": confirmed,
+            "unconfirmed_sats": unconfirmed,
+            "total_sats": confirmed + unconfirmed
+        }
+    except Exception as e:
+        # If API fails, return zeros or handle properly
+        return {"address": address, "error": str(e), "total_sats": 0}
+
+def get_address_utxos(address: str) -> list:
+    """
+    Returns a list of unspent transaction outputs (UTXOs) for the address.
+    """
+    url = f"{settings.mempool_api_url}/address/{address}/utxo"
+    try:
+        response = httpx.get(url)
+        response.raise_for_status()
+        return response.json()
+    except Exception:
+        return []

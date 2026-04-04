@@ -39,9 +39,26 @@ async def create_escrow(request: EscrowCreateRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.get("/{contract_id}", response_model=EscrowResponse)
-async def get_escrow(contract_id: str):
+@router.get("/{contract_id}/status")
+async def get_escrow_status(contract_id: str):
     contract = get_contract(contract_id)
     if not contract:
         raise HTTPException(status_code=404, detail="Contract not found")
-    return contract
+        
+    from app.services.bitcoin_utils import get_address_balance
+    
+    # Check balance from the blockchain
+    balance_info = get_address_balance(contract["p2wsh_address"])
+    
+    # Optional: Update DB status if balance > 0
+    if balance_info["total_sats"] > 0 and contract["status"] == "pending":
+        # Logic to update contract status could go here
+        pass
+        
+    return {
+        "contract_id": contract_id,
+        "p2wsh_address": contract["p2wsh_address"],
+        "balance": balance_info,
+        "amount_expected": contract["amount"],
+        "is_funded": balance_info["total_sats"] >= contract["amount"]
+    }
