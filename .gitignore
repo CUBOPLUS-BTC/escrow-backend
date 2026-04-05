@@ -12,3 +12,9 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# AI Agents & Skills
+.agents/
+.gemini/
+plan.md
+skills-lock.json
