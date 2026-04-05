@@ -45,6 +45,9 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
+# Ejecutar tests de integración (Nostr/L402)
+python -m pytest tests/test_l402_flow.py
+
 # Ejecuta el schema SQL en tu proyecto Supabase (supabase_schema.sql)
 
 fastapi dev app/main.py
